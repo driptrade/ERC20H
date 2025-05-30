@@ -478,6 +478,40 @@ describe('ERC20H', () => {
         expect(await nft.tokenURI(tid)).to.eq(`ipfs://a1b2c3d4e5g6h7i8j9k0/${i}`)
       }
     })
+
+    it('lock() does not mint tokens after NFT supply has been exhausted', async () => {
+      const { owner, ft, nft } = await deployFixturesWithActiveTiers()
+      const ownerAddress = await owner.getAddress()
+
+      await ft.mint(owner, 200_000n)
+      const balance = await ft.balanceOf(owner)
+      await expect(balance).to.eq(200_000n)
+
+      await ft.lock(122_000n)
+      const [locked0, bonded0, awaitingUnlock0] = await ft.lockedBalancesOf(owner)
+      await expect(locked0).to.eq(122_000n)
+      await expect(bonded0).to.eq(122_000n)
+      await expect(awaitingUnlock0).to.eq(0n)
+      expect(await nft.balanceOf(owner)).to.eq(32)
+      expect(await nft.totalSupply()).to.eq(32)
+
+      await nft.burn(0n)
+      const [locked1, bonded1, awaitingUnlock1] = await ft.lockedBalancesOf(owner)
+      await expect(locked1).to.eq(112_000n)
+      await expect(bonded1).to.eq(112_000n)
+      await expect(awaitingUnlock1).to.eq(0n)
+      expect(await nft.balanceOf(owner)).to.eq(31)
+      expect(await nft.totalSupply()).to.eq(31)
+
+      // locking more tokens should not mint more NFTs since all NFT supplies have been exhausted
+      await ft.lock(10_000n)
+      const [locked2, bonded2, awaitingUnlock2] = await ft.lockedBalancesOf(owner)
+      await expect(locked2).to.eq(122_000n)
+      await expect(bonded2).to.eq(112_000n)
+      await expect(awaitingUnlock2).to.eq(0n)
+      expect(await nft.balanceOf(owner)).to.eq(31)
+      expect(await nft.totalSupply()).to.eq(31)
+    })
   })
 
   describe('Unlocking and unbonding behavior', () => {
