@@ -781,7 +781,6 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
                 // Move nextIndex record to index 0
                 UnlockingTokens memory nextT = balances.unlockingTokens[nextIndex];
                 nextT.prevIndex = 0;
-                balances.unlockingTokens[nextT.nextIndex].prevIndex = 0;
                 if (nextT.nextIndex > 0) {
                     balances.unlockingTokens[nextT.nextIndex].prevIndex = 0;
                 }
