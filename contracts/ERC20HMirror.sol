@@ -833,12 +833,8 @@ abstract contract ERC20HMirror is Context, Ownable, ERC165, IERC721, IERC721Meta
 
         // if there are any unused slots in the array, clean them up
         if (tokensAdded > 0 && tokensAdded < numTokens) {
-            uint256 unusedSlots;
-            unchecked {
-                unusedSlots = numTokens - tokensAdded;
-            }
             assembly {
-                mstore(tokenIds, sub(mload(tokenIds), unusedSlots))
+                mstore(tokenIds, tokensAdded)
             }
         }
 
