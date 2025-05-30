@@ -748,7 +748,7 @@ abstract contract ERC20HMirror is Context, Ownable, ERC165, IERC721, IERC721Meta
             uint256 remainingSupply;
             uint256 multiple;
             unchecked {
-                remainingSupply = uint256(tierInfo.maxSupply - tierInfo.totalSupply);
+                remainingSupply = uint256(tierInfo.maxSupply - tierInfo.nextTokenIdSuffix);
                 multiple = remaining / tierUnits;
             }
             if (multiple > remainingSupply) {
@@ -796,7 +796,7 @@ abstract contract ERC20HMirror is Context, Ownable, ERC165, IERC721, IERC721Meta
             uint256 remainingSupply;
             uint256 multiple;
             unchecked {
-                remainingSupply = uint256(tierInfo.maxSupply - tierInfo.totalSupply);
+                remainingSupply = uint256(tierInfo.maxSupply - tierInfo.nextTokenIdSuffix);
                 multiple = remaining / tierUnits;
             }
             if (multiple > remainingSupply) {
