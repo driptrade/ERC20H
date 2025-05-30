@@ -107,10 +107,6 @@ abstract contract ERC20HMirror is Context, Ownable, ERC165, IERC721, IERC721Meta
 
     error ERC20HMirrorHybridContractNotLinked();
 
-    error ERC20HMirrorFailedToReleaseBondedTokens(uint256 tokenId);
-
-    error ERC20HMirrorFailedToBondTokens(uint256 tokenId);
-
     error ERC20HMirrorFailedToTransferBondedTokens(uint256 tokenId, address from, address to);
 
     error ERC20HMirrorAccessOnlyForHybrid();
