@@ -10,7 +10,7 @@ describe('ERC20H', () => {
     const [owner, user1, user2, user3, user4] = await hre.ethers.getSigners()
 
     const ERC20H = await ethers.getContractFactory('ERC20HMintable')
-    const ft = await ERC20H.deploy(owner)
+    const ft = await ERC20H.deploy(owner, 10_000n)
 
     const ERC20HMirror = await ethers.getContractFactory('ERC20HMintableMirror')
     const nft = await ERC20HMirror.deploy(owner, ft)
@@ -170,6 +170,18 @@ describe('ERC20H', () => {
 
       const tiers = await nft.getActiveTiers()
       await expect(tiers.length).to.eq(numTiers)
+    })
+
+    it('Cannot set excessive unlock cooldown', async () => {
+      const { owner, ft, nft } = await deployFixturesWithTiers()
+
+      // setting to the max unlock cooldown works
+      await ft.setUnlockCooldown(10_000n)
+
+      await expect(ft.setUnlockCooldown(10_001n)).to.be.revertedWithCustomError(
+        ft,
+        'ERC20HUnlockCooldownExceedsMaxUnlockCooldown'
+      )
     })
   })
 

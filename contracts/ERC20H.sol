@@ -84,6 +84,9 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
     /// @dev the number of blocks unlocking tokens need to wait before being being releasable
     uint96 private _unlockCooldown;
 
+    /// @dev the maximum value that _unlockCooldown can be
+    uint96 private _maxUnlockCooldown;
+
     /// @dev token balances for addresses
     mapping(address account => AddressBalances) private _balances;
 
@@ -176,6 +179,11 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
     error ERC20HAlreadySetMirror(address mirror);
 
     /**
+     * @dev Indicates the new unlock cooldown is greater than the max allowable unlock cooldown.
+     */
+    error ERC20HUnlockCooldownExceedsMaxUnlockCooldown(uint96 newUnlockCooldown, uint96 maxUnlockCooldown);
+
+    /**
      * @dev Indicates a mismatch between expected tokens bonded and how many actually bonded.
      * @param expected Amount of tokens expected to be bonded.
      * @param actual Actual amount of tokens that was bonded.
@@ -194,14 +202,22 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
     }
 
     /**
-     * @dev Sets the values for {name} and {symbol}. Also sets an {initialOwner} who can only manage
-     * the unlock cooldown and set the mirror contract address.
+     * @dev Sets the values for {name}, {symbol} and {maxUnlockCooldown}. Also sets
+     * an {initialOwner} who can only manage the unlock cooldown and set the mirror
+     * contract address.
      *
-     * Both values are immutable: they can only be set once during construction.
+     * {name}, {symbol}, and {maxUnlockCooldown} are immutable: they can only be set
+     * once during construction.
      */
-    constructor(address initialOwner_, string memory name_, string memory symbol_) Ownable(initialOwner_) {
+    constructor(
+        address initialOwner_,
+        string memory name_,
+        string memory symbol_,
+        uint96 maxUnlockCooldown_
+    ) Ownable(initialOwner_) {
         _name = name_;
         _symbol = symbol_;
+        _maxUnlockCooldown = maxUnlockCooldown_;
     }
 
     /**
@@ -609,6 +625,10 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
      * Note not all tranches of tokens need to wait for the cooldown.
      */
     function _setUnlockCooldown(uint96 unlockCooldown_) internal virtual {
+        if (unlockCooldown_ > _maxUnlockCooldown) {
+            revert ERC20HUnlockCooldownExceedsMaxUnlockCooldown(unlockCooldown_, _maxUnlockCooldown);
+        }
+
         _unlockCooldown = unlockCooldown_;
     }
 
