@@ -1,1 +1,6 @@
+artifacts/
+cache/
+node_modules/
+typechain-types/
+
 .DS_Store

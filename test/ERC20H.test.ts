@@ -1,18 +1,15 @@
 import { mine } from '@nomicfoundation/hardhat-network-helpers'
-import '@openzeppelin/hardhat-upgrades'
 import { expect } from 'chai'
 import hre, { ethers, upgrades } from 'hardhat'
-
-import { Marketplace, MarketplaceAuxiliary, MarketplaceUserSettings } from '../typechain-types'
 
 describe('ERC20H', () => {
   async function deployFixtures() {
     const [owner, user1, user2, user3, user4] = await hre.ethers.getSigners()
 
-    const ERC20H = await ethers.getContractFactory('ERC20HMintable')
+    const ERC20H = await ethers.getContractFactory('ERC20HMock')
     const ft = await ERC20H.deploy(owner, 10_000n)
 
-    const ERC20HMirror = await ethers.getContractFactory('ERC20HMintableMirror')
+    const ERC20HMirror = await ethers.getContractFactory('ERC20HMirrorMock')
     const nft = await ERC20HMirror.deploy(owner, ft)
 
     await ft.setMirror(nft)
