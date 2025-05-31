@@ -781,7 +781,7 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
             // terminate now.
             uint256 releaseBlock;
             unchecked { releaseBlock = t.cooldownStart + unlockCooldown; }
-            if (t.cooldownStart + unlockCooldown > block.number) {
+            if (releaseBlock > block.number) {
                 break;
             }
 
