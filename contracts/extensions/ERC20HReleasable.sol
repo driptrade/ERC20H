@@ -27,7 +27,7 @@ abstract contract ERC20HReleasable is ERC20H, IERC20HReleasable {
 
     error ERC20HReleasableNoTranchesToRelease();
 
-    function setUnlockCooldown(uint96 unlockCooldown_) external virtual {
+    function setUnlockCooldown(uint96 unlockCooldown_) external virtual onlyOwner {
         _setUnlockCooldown(unlockCooldown_);
     }
 

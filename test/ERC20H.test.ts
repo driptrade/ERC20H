@@ -10,7 +10,7 @@ describe('ERC20H', () => {
     const [owner, user1, user2, user3, user4] = await hre.ethers.getSigners()
 
     const ERC20H = await ethers.getContractFactory('ERC20HMintable')
-    const ft = await ERC20H.deploy(owner)
+    const ft = await ERC20H.deploy(owner, 10_000n)
 
     const ERC20HMirror = await ethers.getContractFactory('ERC20HMintableMirror')
     const nft = await ERC20HMirror.deploy(owner, ft)
@@ -170,6 +170,18 @@ describe('ERC20H', () => {
 
       const tiers = await nft.getActiveTiers()
       await expect(tiers.length).to.eq(numTiers)
+    })
+
+    it('Cannot set excessive unlock cooldown', async () => {
+      const { owner, ft, nft } = await deployFixturesWithTiers()
+
+      // setting to the max unlock cooldown works
+      await ft.setUnlockCooldown(10_000n)
+
+      await expect(ft.setUnlockCooldown(10_001n)).to.be.revertedWithCustomError(
+        ft,
+        'ERC20HUnlockCooldownExceedsMaxUnlockCooldown'
+      )
     })
   })
 
@@ -478,6 +490,40 @@ describe('ERC20H', () => {
         expect(await nft.tokenURI(tid)).to.eq(`ipfs://a1b2c3d4e5g6h7i8j9k0/${i}`)
       }
     })
+
+    it('lock() does not mint tokens after NFT supply has been exhausted', async () => {
+      const { owner, ft, nft } = await deployFixturesWithActiveTiers()
+      const ownerAddress = await owner.getAddress()
+
+      await ft.mint(owner, 200_000n)
+      const balance = await ft.balanceOf(owner)
+      await expect(balance).to.eq(200_000n)
+
+      await ft.lock(122_000n)
+      const [locked0, bonded0, awaitingUnlock0] = await ft.lockedBalancesOf(owner)
+      await expect(locked0).to.eq(122_000n)
+      await expect(bonded0).to.eq(122_000n)
+      await expect(awaitingUnlock0).to.eq(0n)
+      expect(await nft.balanceOf(owner)).to.eq(32)
+      expect(await nft.totalSupply()).to.eq(32)
+
+      await nft.burn(0n)
+      const [locked1, bonded1, awaitingUnlock1] = await ft.lockedBalancesOf(owner)
+      await expect(locked1).to.eq(112_000n)
+      await expect(bonded1).to.eq(112_000n)
+      await expect(awaitingUnlock1).to.eq(0n)
+      expect(await nft.balanceOf(owner)).to.eq(31)
+      expect(await nft.totalSupply()).to.eq(31)
+
+      // locking more tokens should not mint more NFTs since all NFT supplies have been exhausted
+      await ft.lock(10_000n)
+      const [locked2, bonded2, awaitingUnlock2] = await ft.lockedBalancesOf(owner)
+      await expect(locked2).to.eq(122_000n)
+      await expect(bonded2).to.eq(112_000n)
+      await expect(awaitingUnlock2).to.eq(0n)
+      expect(await nft.balanceOf(owner)).to.eq(31)
+      expect(await nft.totalSupply()).to.eq(31)
+    })
   })
 
   describe('Unlocking and unbonding behavior', () => {
@@ -597,6 +643,85 @@ describe('ERC20H', () => {
       expect(bonded8).to.eq(0)
       expect(awaitingUnlock8).to.eq(0)
       expect(await ft.balanceOf(owner)).to.eq(10_000n)
+    })
+
+    it('unlock() + increasing cooldown means longer wait', async () => {
+      const { owner, ft, nft } = await deployFixturesWithActiveTiers()
+      await ft.setUnlockCooldown(1000n)
+      await ft.mint(owner, 10_000n)
+
+      await ft.lockOnly(10_000n)
+
+      const [locked0, bonded0, awaitingUnlock0] = await ft.lockedBalancesOf(owner)
+      expect(locked0).to.eq(10_000n)
+      expect(bonded0).to.eq(0)
+      expect(awaitingUnlock0).to.eq(0)
+
+      await ft.unlock(1_000n)
+      const [locked1, bonded1, awaitingUnlock1] = await ft.lockedBalancesOf(owner)
+      expect(locked1).to.eq(10_000n)
+      expect(bonded1).to.eq(0)
+      expect(awaitingUnlock1).to.eq(1_000n)
+
+      // releasing before cooldown ends does nothing
+      await ft.release(1_000n, ethers.Typed.overrides({}))
+      const [locked2, bonded2, awaitingUnlock2] = await ft.lockedBalancesOf(owner)
+      expect(locked2).to.eq(10_000n)
+      expect(bonded2).to.eq(0)
+      expect(awaitingUnlock2).to.eq(1_000n)
+
+      await ft.setUnlockCooldown(2000n)
+
+      await mine(1000)
+
+      // releasing before cooldown ends does nothing
+      await ft.release(1_000n, ethers.Typed.overrides({}))
+      const [locked3, bonded3, awaitingUnlock3] = await ft.lockedBalancesOf(owner)
+      expect(locked3).to.eq(10_000n)
+      expect(bonded3).to.eq(0)
+      expect(awaitingUnlock3).to.eq(1_000n)
+
+      await mine(1000)
+
+      await ft.release(1_000n, ethers.Typed.overrides({}))
+      const [locked4, bonded4, awaitingUnlock4] = await ft.lockedBalancesOf(owner)
+      expect(locked4).to.eq(9_000n)
+      expect(bonded4).to.eq(0)
+      expect(awaitingUnlock4).to.eq(0)
+    })
+
+    it('unlock() + decreasing cooldown means shorter wait', async () => {
+      const { owner, ft, nft } = await deployFixturesWithActiveTiers()
+      await ft.setUnlockCooldown(1000n)
+      await ft.mint(owner, 10_000n)
+
+      await ft.lockOnly(10_000n)
+
+      const [locked0, bonded0, awaitingUnlock0] = await ft.lockedBalancesOf(owner)
+      expect(locked0).to.eq(10_000n)
+      expect(bonded0).to.eq(0)
+      expect(awaitingUnlock0).to.eq(0)
+
+      await ft.unlock(1_000n)
+      const [locked1, bonded1, awaitingUnlock1] = await ft.lockedBalancesOf(owner)
+      expect(locked1).to.eq(10_000n)
+      expect(bonded1).to.eq(0)
+      expect(awaitingUnlock1).to.eq(1_000n)
+
+      // releasing before cooldown ends does nothing
+      await ft.release(1_000n, ethers.Typed.overrides({}))
+      const [locked2, bonded2, awaitingUnlock2] = await ft.lockedBalancesOf(owner)
+      expect(locked2).to.eq(10_000n)
+      expect(bonded2).to.eq(0)
+      expect(awaitingUnlock2).to.eq(1_000n)
+
+      await ft.setUnlockCooldown(0)
+
+      await ft.release(1_000n, ethers.Typed.overrides({}))
+      const [locked3, bonded3, awaitingUnlock3] = await ft.lockedBalancesOf(owner)
+      expect(locked3).to.eq(9_000n)
+      expect(bonded3).to.eq(0)
+      expect(awaitingUnlock3).to.eq(0)
     })
 
     it('unlock() + release() many tranches', async () => {

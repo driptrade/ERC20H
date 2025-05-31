@@ -107,10 +107,6 @@ abstract contract ERC20HMirror is Context, Ownable, ERC165, IERC721, IERC721Meta
 
     error ERC20HMirrorHybridContractNotLinked();
 
-    error ERC20HMirrorFailedToReleaseBondedTokens(uint256 tokenId);
-
-    error ERC20HMirrorFailedToBondTokens(uint256 tokenId);
-
     error ERC20HMirrorFailedToTransferBondedTokens(uint256 tokenId, address from, address to);
 
     error ERC20HMirrorAccessOnlyForHybrid();
@@ -748,7 +744,7 @@ abstract contract ERC20HMirror is Context, Ownable, ERC165, IERC721, IERC721Meta
             uint256 remainingSupply;
             uint256 multiple;
             unchecked {
-                remainingSupply = uint256(tierInfo.maxSupply - tierInfo.totalSupply);
+                remainingSupply = uint256(tierInfo.maxSupply - tierInfo.nextTokenIdSuffix);
                 multiple = remaining / tierUnits;
             }
             if (multiple > remainingSupply) {
@@ -796,7 +792,7 @@ abstract contract ERC20HMirror is Context, Ownable, ERC165, IERC721, IERC721Meta
             uint256 remainingSupply;
             uint256 multiple;
             unchecked {
-                remainingSupply = uint256(tierInfo.maxSupply - tierInfo.totalSupply);
+                remainingSupply = uint256(tierInfo.maxSupply - tierInfo.nextTokenIdSuffix);
                 multiple = remaining / tierUnits;
             }
             if (multiple > remainingSupply) {
@@ -833,12 +829,8 @@ abstract contract ERC20HMirror is Context, Ownable, ERC165, IERC721, IERC721Meta
 
         // if there are any unused slots in the array, clean them up
         if (tokensAdded > 0 && tokensAdded < numTokens) {
-            uint256 unusedSlots;
-            unchecked {
-                unusedSlots = numTokens - tokensAdded;
-            }
             assembly {
-                mstore(tokenIds, sub(mload(tokenIds), unusedSlots))
+                mstore(tokenIds, tokensAdded)
             }
         }
 

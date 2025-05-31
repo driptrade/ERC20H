@@ -36,8 +36,8 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
     struct UnlockingTokens {
         /// @dev amount of tokens
         uint256 amount;
-        /// @dev the block at which the unlock cooldown would have elapsed
-        uint256 releaseBlock;
+        /// @dev the block at which the unlock cooldown started
+        uint256 cooldownStart;
         /// @dev linked list -- index of prev item in linked list
         uint128 prevIndex;
         /// @dev linked list -- index of next item in linked list (0 means no next index)
@@ -83,6 +83,9 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
 
     /// @dev the number of blocks unlocking tokens need to wait before being being releasable
     uint96 private _unlockCooldown;
+
+    /// @dev the maximum value that _unlockCooldown can be
+    uint96 private _maxUnlockCooldown;
 
     /// @dev token balances for addresses
     mapping(address account => AddressBalances) private _balances;
@@ -176,6 +179,11 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
     error ERC20HAlreadySetMirror(address mirror);
 
     /**
+     * @dev Indicates the new unlock cooldown is greater than the max allowable unlock cooldown.
+     */
+    error ERC20HUnlockCooldownExceedsMaxUnlockCooldown(uint96 newUnlockCooldown, uint96 maxUnlockCooldown);
+
+    /**
      * @dev Indicates a mismatch between expected tokens bonded and how many actually bonded.
      * @param expected Amount of tokens expected to be bonded.
      * @param actual Actual amount of tokens that was bonded.
@@ -194,14 +202,22 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
     }
 
     /**
-     * @dev Sets the values for {name} and {symbol}. Also sets an {initialOwner} who can only manage
-     * the unlock cooldown and set the mirror contract address.
+     * @dev Sets the values for {name}, {symbol} and {maxUnlockCooldown}. Also sets
+     * an {initialOwner} who can only manage the unlock cooldown and set the mirror
+     * contract address.
      *
-     * Both values are immutable: they can only be set once during construction.
+     * {name}, {symbol}, and {maxUnlockCooldown} are immutable: they can only be set
+     * once during construction.
      */
-    constructor(address initialOwner_, string memory name_, string memory symbol_) Ownable(initialOwner_) {
+    constructor(
+        address initialOwner_,
+        string memory name_,
+        string memory symbol_,
+        uint96 maxUnlockCooldown_
+    ) Ownable(initialOwner_) {
         _name = name_;
         _symbol = symbol_;
+        _maxUnlockCooldown = maxUnlockCooldown_;
     }
 
     /**
@@ -609,6 +625,10 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
      * Note not all tranches of tokens need to wait for the cooldown.
      */
     function _setUnlockCooldown(uint96 unlockCooldown_) internal virtual {
+        if (unlockCooldown_ > _maxUnlockCooldown) {
+            revert ERC20HUnlockCooldownExceedsMaxUnlockCooldown(unlockCooldown_, _maxUnlockCooldown);
+        }
+
         _unlockCooldown = unlockCooldown_;
     }
 
@@ -707,13 +727,9 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
         if (_unlockCooldown > 0) {
             uint128 nextIndex = balances.numIndexes;
             uint128 indexOfLatest = balances.indexOfLatest;
-            uint256 releaseBlock;
-            unchecked {
-                releaseBlock = block.number + uint256(_unlockCooldown);
-            }
             balances.unlockingTokens[nextIndex] = UnlockingTokens(
                 value, // amount
-                releaseBlock, // releaseBlock
+                block.number, // cooldownStart
                 indexOfLatest, // prevIndex
                 0 // nextIndex
             );
@@ -726,6 +742,8 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
             balances.numIndexes = nextIndex + 1;
             balances.unlocking += value;
 
+            uint256 releaseBlock;
+            unchecked { releaseBlock = block.number + uint256(_unlockCooldown); }
             emit AwaitingRelease(owner, value, releaseBlock);
         } else {
             // no cooldown. unlock the funds immediately
@@ -753,6 +771,7 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
         if (numToRelease == 0) numToRelease = type(uint128).max;
 
         uint256 amountReleased;
+        uint256 unlockCooldown = uint256(_unlockCooldown);
 
         while (balances.numIndexes > 0 && numToRelease > 0) {
             UnlockingTokens storage t = balances.unlockingTokens[0];
@@ -760,7 +779,9 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
             // If the releaseBlock is greater than the current block, then
             // there are no more token ready to be released and we can
             // terminate now.
-            if (t.releaseBlock > block.number) {
+            uint256 releaseBlock;
+            unchecked { releaseBlock = t.cooldownStart + unlockCooldown; }
+            if (releaseBlock > block.number) {
                 break;
             }
 
@@ -781,7 +802,6 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
                 // Move nextIndex record to index 0
                 UnlockingTokens memory nextT = balances.unlockingTokens[nextIndex];
                 nextT.prevIndex = 0;
-                balances.unlockingTokens[nextT.nextIndex].prevIndex = 0;
                 if (nextT.nextIndex > 0) {
                     balances.unlockingTokens[nextT.nextIndex].prevIndex = 0;
                 }
