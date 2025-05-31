@@ -36,8 +36,8 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
     struct UnlockingTokens {
         /// @dev amount of tokens
         uint256 amount;
-        /// @dev the block at which the unlock cooldown would have elapsed
-        uint256 releaseBlock;
+        /// @dev the block at which the unlock cooldown started
+        uint256 cooldownStart;
         /// @dev linked list -- index of prev item in linked list
         uint128 prevIndex;
         /// @dev linked list -- index of next item in linked list (0 means no next index)
@@ -707,13 +707,9 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
         if (_unlockCooldown > 0) {
             uint128 nextIndex = balances.numIndexes;
             uint128 indexOfLatest = balances.indexOfLatest;
-            uint256 releaseBlock;
-            unchecked {
-                releaseBlock = block.number + uint256(_unlockCooldown);
-            }
             balances.unlockingTokens[nextIndex] = UnlockingTokens(
                 value, // amount
-                releaseBlock, // releaseBlock
+                block.number, // cooldownStart
                 indexOfLatest, // prevIndex
                 0 // nextIndex
             );
@@ -726,6 +722,8 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
             balances.numIndexes = nextIndex + 1;
             balances.unlocking += value;
 
+            uint256 releaseBlock;
+            unchecked { releaseBlock = block.number + uint256(_unlockCooldown); }
             emit AwaitingRelease(owner, value, releaseBlock);
         } else {
             // no cooldown. unlock the funds immediately
@@ -753,6 +751,7 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
         if (numToRelease == 0) numToRelease = type(uint128).max;
 
         uint256 amountReleased;
+        uint256 unlockCooldown = uint256(_unlockCooldown);
 
         while (balances.numIndexes > 0 && numToRelease > 0) {
             UnlockingTokens storage t = balances.unlockingTokens[0];
@@ -760,7 +759,9 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
             // If the releaseBlock is greater than the current block, then
             // there are no more token ready to be released and we can
             // terminate now.
-            if (t.releaseBlock > block.number) {
+            uint256 releaseBlock;
+            unchecked { releaseBlock = t.cooldownStart + unlockCooldown; }
+            if (t.cooldownStart + unlockCooldown > block.number) {
                 break;
             }
 
