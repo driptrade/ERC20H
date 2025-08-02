@@ -9,7 +9,6 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 import {IERC20H} from "./interfaces/IERC20H.sol";
 import {IERC20HMirror} from "./interfaces/IERC20HMirror.sol";
-import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
 /**
  * @dev Implementation of the {IERC20H} interface.
@@ -30,8 +29,6 @@ import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
  * applications.
  */
 abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Errors, IERC20H {
-    using Strings for uint256;
-
     /// @dev represents a tranche of tokens that are awaiting their unlock cooldown to end
     struct UnlockingTokens {
         /// @dev amount of tokens
@@ -194,7 +191,7 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
      * @dev Only callable by mirror
      */
     modifier mirrorOnly() {
-        if (_msgSender() != _mirror) {
+        if (!_isMirror(_msgSender())) {
             revert ERC20HAccessOnlyForMirror();
         }
 
@@ -446,7 +443,7 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
             // Mirror contract will act only on the bonded balance. We will need to check
             // and decrement balances when msg.sender is the mirror, and a separate flow
             // for when it is not.
-            if (caller == _mirror) {
+            if (_isMirror(caller)) {
                 // msgSender is mirror. so we need to make sure there is enough bonded balance
                 uint256 fromBondedBalance = fromBalances.bonded;
                 if (fromBondedBalance < value) {
@@ -488,7 +485,7 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
 
             // Mirror contract will act on the locked balance only. Increment locked balance
             // if msg.sender is the mirror contract.
-            if (caller == _mirror) {
+            if (_isMirror(caller)) {
                 toBalances.locked += value;
                 toBalances.bonded += value;
             }
@@ -586,7 +583,7 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
      * Does not emit an {Approval} event.
      */
     function _spendAllowance(address owner, address spender, uint256 value) internal virtual {
-        if (_msgSender() != _mirror) {
+        if (!_isMirror(_msgSender())) {
             uint256 currentAllowance = allowance(owner, spender);
             if (currentAllowance < type(uint256).max) {
                 if (currentAllowance < value) {
@@ -648,7 +645,7 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
 
         uint256 bondedAmtStart = _balances[owner].bonded;
 
-        IERC20HMirror iMirror = IERC20HMirror(_mirror);
+        IERC20HMirror iMirror = IERC20HMirror(_getMirror());
 
         (uint256 mintableTokens, uint256 toBond) = iMirror.getMintableNumberOfTokens(value);
         uint256[] memory tokenIdsToMint = iMirror.getMintableTokenIds(mintableTokens, toBond);
@@ -906,5 +903,13 @@ abstract contract ERC20H is Context, Ownable, IERC20, IERC20Metadata, IERC20Erro
 
         emit Unbonded(owner, value);
         emit Released(owner, value);
+    }
+
+    function _getMirror() internal view virtual returns (address) {
+        return _mirror;
+    }
+
+    function _isMirror(address addr) internal view virtual returns (bool) {
+        return addr == _getMirror();
     }
 }

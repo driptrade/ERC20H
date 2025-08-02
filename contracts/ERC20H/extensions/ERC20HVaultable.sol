@@ -3,7 +3,8 @@
 pragma solidity ^0.8.24;
 
 import {ERC20H} from "../ERC20H.sol";
-import {IERC20HReleasable} from "../interfaces/IERC20HReleasable.sol";
+import {IERC20HMirrorVault} from "../interfaces/IERC20HMirrorVault.sol";
+import {IERC20HVaultable} from "../interfaces/IERC20HVaultable.sol";
 
 /**
  * @dev Implementation of the {IERC20} interface.
@@ -23,23 +24,19 @@ import {IERC20HReleasable} from "../interfaces/IERC20HReleasable.sol";
  * conventional and does not conflict with the expectations of ERC-20
  * applications.
  */
-abstract contract ERC20HReleasable is ERC20H, IERC20HReleasable {
+abstract contract ERC20HVaultable is ERC20H, IERC20HVaultable {
+    function depositToVault(uint256 tokenId, uint256 amount) external virtual {
+        IERC20HMirrorVault iMirror = IERC20HMirrorVault(_getMirror());
 
-    error ERC20HReleasableNoTranchesToRelease();
+        address owner = iMirror.ownerOf(tokenId);
 
-    function setUnlockCooldown(uint96 unlockCooldown_) external virtual onlyOwner {
-        _setUnlockCooldown(unlockCooldown_);
-    }
+        (uint256 locked, uint256 bonded, uint256 awaitingUnlock) = lockedBalancesOf(owner);
 
-    function release() external virtual {
-        _releaseUnlockingTokens(_msgSender(), 0);
-    }
-
-    function release(uint128 tranchesToRelease) external virtual {
-        if (tranchesToRelease == 0) {
-            revert ERC20HReleasableNoTranchesToRelease();
-        }
-
-        _releaseUnlockingTokens(_msgSender(), tranchesToRelease);
+        // transfer amount to token id owner
+        transfer(owner, amount);
+        // lock up newly received amount for token id owner
+        _lock(owner, amount + locked - bonded - awaitingUnlock);
+        // once locked, bond it to the specified token id
+        iMirror.bondToVault(owner, tokenId, amount);
     }
 }
