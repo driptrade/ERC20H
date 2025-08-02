@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import { ERC20HMirror } from '../ERC20HMirror.sol';
-import { IERC20H } from '../interfaces/IERC20H.sol';
+import { IERC20H, ERC20HMirror, ERC20HMirrorVault } from '../ERC20H/extensions/ERC20HMirrorVault.sol';
+import { IERC20HMirror } from '../ERC20H/interfaces/IERC20HMirror.sol';
 
-interface IERC20HMintable {
+interface IERC20HMock {
     function burn(address owner, uint256 value) external returns (bool);
 }
 
-contract ERC20HMirrorMock is ERC20HMirror {
+contract ERC20HMirrorMock is ERC20HMirrorVault {
     struct TierInfoDebug {
         bytes32 uriHash;
         uint32 nextTokenIdSuffix;
@@ -22,7 +22,7 @@ contract ERC20HMirrorMock is ERC20HMirror {
 
     constructor(address initialOwner, address hybrid) ERC20HMirror(initialOwner, hybrid) {}
 
-    function bond(address to, uint256 tokenId) external override {
+    function bond(address to, uint256 tokenId) external override(IERC20HMirror, ERC20HMirror) {
         if (!_msgSenderIsHybrid()) {
             _checkAuthorized(to, _msgSender(), tokenId);
         }
@@ -49,19 +49,15 @@ contract ERC20HMirrorMock is ERC20HMirror {
         );
     }
 
-    function _updateAndTransfer(
-        address to,
-        uint256 tokenId,
-        address auth
-    ) internal override returns (address) {
-        // number of tokens represented by tokenId)
-        uint256 bondedUnits = _getUnitsForTier(_getTierIdForToken(tokenId));
+    function _updateAndTransfer(address to, uint256 tokenId, address auth) internal override returns (address) {
+        // number of tokens represented by tokenId
+        uint256 bondedUnits = _getBondedUnitsForTokenId(tokenId);
 
         address from = _update(to, tokenId, auth);
 
         bool success;
         if (to == address(0)) {
-            success = IERC20HMintable(hybrid).burn(from, bondedUnits);
+            success = IERC20HMock(hybrid).burn(from, bondedUnits);
         } else {
             success = IERC20H(hybrid).transferFrom(from, to, bondedUnits);
         }

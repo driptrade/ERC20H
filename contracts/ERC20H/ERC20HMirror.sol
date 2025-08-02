@@ -132,8 +132,8 @@ abstract contract ERC20HMirror is Context, Ownable, ERC165, IERC721, IERC721Meta
         hybrid = hybrid_;
 
         IERC20Metadata h = IERC20Metadata(hybrid_);
-        _name = h.name();
-        _symbol = h.symbol();
+        _setName(h.name());
+        _setSymbol(h.symbol());
     }
 
     function addTiers(AddTierParam[] calldata tierParams) external virtual onlyOwner {
@@ -170,6 +170,11 @@ abstract contract ERC20HMirror is Context, Ownable, ERC165, IERC721, IERC721Meta
 
     function getMintableTokenIds(uint256 numTokens, uint256 backing) external view virtual returns (uint256[] memory) {
         return _getMintableTokenIds(numTokens, backing);
+    }
+
+    function getBondedAmount(uint256 tokenId) public view virtual returns (uint256) {
+        _requireOwned(tokenId);
+        return _getBondedUnitsForTokenId(tokenId);
     }
 
     /// @dev Returns the total number of NFTs minted on this contract. Will clash if used with ERC721Enumerable.
@@ -588,6 +593,20 @@ abstract contract ERC20HMirror is Context, Ownable, ERC165, IERC721, IERC721Meta
     /*                      ERC20HMIRROR INTERNALS                        */
     /*-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»-»*/
 
+    function _setName(string memory name_) internal virtual {
+        _name = name_;
+    }
+
+    function _setSymbol(string memory symbol_) internal virtual {
+        _symbol = symbol_;
+    }
+
+    function _setUriHash(string calldata uri) internal virtual returns (bytes32) {
+        bytes32 uriHash = keccak256(bytes(uri));
+        _uris[uriHash] = uri;
+        return uriHash;
+    }
+
     function _addTiers(AddTierParam[] calldata tierParams) internal virtual {
         require(tierParams.length <= type(uint16).max, 'Too many tiers');
         uint16 numParams = uint16(tierParams.length);
@@ -598,7 +617,9 @@ abstract contract ERC20HMirror is Context, Ownable, ERC165, IERC721, IERC721Meta
 
         for (uint16 i = 0; i < numParams;) {
             AddTierParam calldata param = tierParams[i];
-            bytes32 uriHash = keccak256(bytes(param.uri));
+
+            if (param.units == 0) revert ERC20HMirrorTierHasNoUnits();
+            if (param.maxSupply == 0) revert ERC20HMirrorTierHasZeroSupply();
 
             uint16 tierId;
             unchecked {
@@ -606,12 +627,7 @@ abstract contract ERC20HMirror is Context, Ownable, ERC165, IERC721, IERC721Meta
                 i += 1;
             }
 
-            if (param.units == 0) {
-                revert ERC20HMirrorTierHasNoUnits();
-            }
-            if (param.maxSupply == 0) {
-                revert ERC20HMirrorTierHasZeroSupply();
-            }
+            bytes32 uriHash = _setUriHash(param.uri);
 
             _tiers[tierId] = TierInfo(
                 uriHash, // uriHash (bytes32)
@@ -622,7 +638,6 @@ abstract contract ERC20HMirror is Context, Ownable, ERC165, IERC721, IERC721Meta
                 tierId, // tierId (uint16)
                 false
             );
-            _uris[uriHash] = param.uri;
         }
 
         _nextTierId = endTierId;
@@ -683,8 +698,8 @@ abstract contract ERC20HMirror is Context, Ownable, ERC165, IERC721, IERC721Meta
     }
 
     function _updateAndReleaseAndUnlock(uint256 tokenId, address auth) internal virtual returns (address, uint256) {
-        // number of tokens represented by tokenId)
-        uint256 bondedUnits = _getUnitsForTier(_getTierIdForToken(tokenId));
+        // number of tokens represented by tokenId
+        uint256 bondedUnits = _getBondedUnitsForTokenId(tokenId);
 
         // must burn to release tokens
         address from = _update(address(0), tokenId, auth);
@@ -701,7 +716,7 @@ abstract contract ERC20HMirror is Context, Ownable, ERC165, IERC721, IERC721Meta
             revert ERC721InvalidSender(address(0));
         }
 
-        // number of tokens represented by tokenId
+        // number of tokens represented by the tier of the token id
         uint256 bondedUnits = _getUnitsForTier(_getTierIdForToken(tokenId));
 
         IERC20H(hybrid).onERC20HBonded(to, bondedUnits);
@@ -710,8 +725,8 @@ abstract contract ERC20HMirror is Context, Ownable, ERC165, IERC721, IERC721Meta
     }
 
     function _updateAndTransfer(address to, uint256 tokenId, address auth) internal virtual returns (address) {
-        // number of tokens represented by tokenId)
-        uint256 bondedUnits = _getUnitsForTier(_getTierIdForToken(tokenId));
+        // number of tokens represented by tokenId
+        uint256 bondedUnits = _getBondedUnitsForTokenId(tokenId);
 
         address from = _update(to, tokenId, auth);
 
@@ -857,6 +872,10 @@ abstract contract ERC20HMirror is Context, Ownable, ERC165, IERC721, IERC721Meta
         }
 
         return tierId;
+    }
+
+    function _getBondedUnitsForTokenId(uint256 tokenId) internal view virtual returns (uint256) {
+        return _getUnitsForTier(_getTierIdForToken(tokenId));
     }
 
     function _getTierIdForToken(uint256 tokenId) internal view virtual returns (uint16) {

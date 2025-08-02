@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import { ERC20H, ERC20HReleasable } from '../extensions/ERC20HReleasable.sol';
+import { ERC20H, ERC20HReleasable } from '../ERC20H/extensions/ERC20HReleasable.sol';
+import { ERC20HVaultable } from '../ERC20H/extensions/ERC20HVaultable.sol';
 
-contract ERC20HMock is ERC20HReleasable {
+contract ERC20HMock is ERC20HVaultable, ERC20HReleasable {
     constructor(
         address initialOwner,
         uint96 maxUnlockCooldown

@@ -1,6 +1,6 @@
 import { mine } from '@nomicfoundation/hardhat-network-helpers'
 import { expect } from 'chai'
-import hre, { ethers, upgrades } from 'hardhat'
+import hre, { ethers } from 'hardhat'
 
 describe('ERC20H', () => {
   async function deployFixtures() {
@@ -57,6 +57,31 @@ describe('ERC20H', () => {
     await nft.setActiveTiers([0, 1, 2])
 
     return fixtures
+  }
+
+  async function deployVaultFixtures() {
+    const fixtures = await deployFixtures()
+    const { owner, nft } = fixtures
+
+    await nft.addTiers([
+      {
+        units: BigInt(10_000),
+        maxSupply: 10_000,
+        uri: 'ipfs://1234567890/',
+      },
+      {
+        units: BigInt(1_000),
+        maxSupply: 10_000,
+        uri: 'ipfs://abcdefghijklmnopqrstuvwxyz/',
+      },
+    ])
+
+    await nft.setActiveTiers([0, 1])
+
+    const token = await ethers.getContractFactory('ERC20HMock')
+    const ft2 = await token.deploy(owner, 10_000n)
+
+    return { ...fixtures, ft2 }
   }
 
   describe('init', () => {
@@ -177,7 +202,7 @@ describe('ERC20H', () => {
 
       await expect(ft.setUnlockCooldown(10_001n)).to.be.revertedWithCustomError(
         ft,
-        'ERC20HUnlockCooldownExceedsMaxUnlockCooldown'
+        'ERC20HUnlockCooldownExceedsMaxUnlockCooldown',
       )
     })
   })
@@ -972,6 +997,32 @@ describe('ERC20H', () => {
       expect(await ft.balanceOf(user1)).to.eq(10_000n)
     })
 
+    it('Can transfer unlocked tokens when there are locked tokens', async () => {
+      const { owner, user1, ft, nft } = await deployFixturesWithActiveTiers()
+      await ft.setUnlockCooldown(1)
+      await ft.mint(owner, 19_000n)
+
+      // lock up tokens and mint an NFT
+      await ft.lockOnly(10_000n)
+
+      expect(await ft.balanceOf(user1)).to.eq(0)
+      await ft.transfer(user1, 9_000n)
+      expect(await ft.balanceOf(user1)).to.eq(9_000n)
+    })
+
+    it('Can transfer unlocked tokens when there are bonded tokens', async () => {
+      const { owner, user1, ft, nft } = await deployFixturesWithActiveTiers()
+      await ft.setUnlockCooldown(1)
+      await ft.mint(owner, 19_000n)
+
+      // lock up tokens and mint an NFT
+      await ft.lock(10_000n)
+
+      expect(await ft.balanceOf(user1)).to.eq(0)
+      await ft.transfer(user1, 9_000n)
+      expect(await ft.balanceOf(user1)).to.eq(9_000n)
+    })
+
     it('Cannot transfer locked tokens', async () => {
       const { owner, user1, ft, nft } = await deployFixturesWithActiveTiers()
       await ft.setUnlockCooldown(1)
@@ -1107,6 +1158,21 @@ describe('ERC20H', () => {
       expect(await ft.allowance(owner, user1)).to.eq(100n)
     })
 
+    it('Cannot transferFrom own tokens without approval', async () => {
+      const { owner, user1, ft, nft } = await deployFixturesWithActiveTiers()
+      const ownerAddress = await owner.getAddress()
+
+      await ft.setUnlockCooldown(1)
+      await ft.mint(owner, 19_000n)
+
+      await expect(
+        ft.connect(owner).transferFrom(owner, user1, 19_000n)
+      ).to.be.revertedWithCustomError(ft, 'ERC20InsufficientAllowance')
+
+      expect(await ft.balanceOf(owner)).to.eq(19_000n)
+      expect(await ft.balanceOf(user1)).to.eq(0)
+    })
+
     it('Can transfer NFT with approval', async () => {
       const { owner, user1, ft, nft } = await deployFixturesWithActiveTiers()
       const ownerAddress = await owner.getAddress()
@@ -1139,6 +1205,452 @@ describe('ERC20H', () => {
       await expect(awaitingUnlock1).to.eq(0)
       expect(await nft.balanceOf(user1)).to.eq(1)
       expect(await nft.ownerOf(0n)).to.eq(user1Address)
+    })
+  })
+
+  describe('Vault behavior', () => {
+    it('can deposit for 1 token', async () => {
+      const { owner, user1, ft, nft, ft2 } = await deployVaultFixtures()
+
+      await ft.mint(owner, 100_000_000n)
+      await ft.lock(1_000_000n) // should mint 100 nfts
+      expect(await nft.balanceOf(owner)).to.eq(100)
+      expect(await nft.vaultBalanceOf(50n, ethers.Typed.overrides({}))).to.eq(0)
+      expect(await nft.vaultBalanceOf(50n, ft2, ethers.Typed.overrides({}))).to.eq(0)
+
+      // deposits native token
+      await nft['deposit(address,uint256,uint256)'](
+        ethers.ZeroAddress,
+        1_000_000n,
+        50n,
+        ethers.Typed.overrides({ value: 1_000_000n }),
+      )
+      expect(await nft.vaultBalanceOf(50n, ethers.Typed.overrides({}))).to.eq(1_000_000n)
+      expect(await nft.vaultBalanceOf(50n, ft2, ethers.Typed.overrides({}))).to.eq(0)
+
+      // deposits erc20 token
+      await ft2.mint(owner, 100_000_000n)
+      await ft2.approve(nft, 1_000_000n)
+      await nft['deposit(address,uint256,uint256)'](ft2, 1_000_000n, 50n, ethers.Typed.overrides({}))
+      expect(await nft.vaultBalanceOf(50n, ethers.Typed.overrides({}))).to.eq(1_000_000n)
+      expect(await nft.vaultBalanceOf(50n, ft2, ethers.Typed.overrides({}))).to.eq(1_000_000n)
+    })
+
+    it('cannot deposit hybrid token', async () => {
+      const { owner, user1, ft, nft } = await deployVaultFixtures()
+
+      await ft.mint(owner, 100_000_000n)
+      await ft.lock(1_000_000n) // should mint 100 nfts
+      expect(await nft.balanceOf(owner)).to.eq(100)
+      expect(await nft.vaultBalanceOf(50n, ethers.Typed.overrides({}))).to.eq(0)
+      expect(await nft.vaultBalanceOf(50n, ft, ethers.Typed.overrides({}))).to.eq(0)
+
+      // deposits erc20 token
+      await ft.approve(nft, 1_000_000n)
+      await expect(
+        nft['deposit(address,uint256,uint256)'](ft, 1_000_000n, 50n, ethers.Typed.overrides({})),
+      ).to.be.revertedWithCustomError(nft, 'ERC20HMirrorVaultCannotDepositHybridToken')
+
+      expect(await nft.vaultBalanceOf(50n, ethers.Typed.overrides({}))).to.eq(0)
+      expect(await nft.vaultBalanceOf(50n, ft, ethers.Typed.overrides({}))).to.eq(0)
+    })
+
+    it('does not deposit for a token that does not exist', async () => {
+      const { owner, user1, ft, nft } = await deployVaultFixtures()
+
+      const nonexistentId = 102931542412354n
+
+      const contractBalance1 = await ethers.provider.getBalance(nft)
+
+      await expect(
+        nft
+          .connect(user1)
+          [
+            'deposit(address,uint256,uint256)'
+          ](ethers.ZeroAddress, 100n, nonexistentId, ethers.Typed.overrides({ value: 100n })),
+      ).to.be.revertedWithCustomError(nft, 'ERC20HMirrorVaultInvalidDeposit')
+
+      const contractBalance2 = await ethers.provider.getBalance(nft)
+
+      // no change in balance because
+      expect(contractBalance2 - contractBalance1).to.eq(0)
+      expect(await nft.vaultBalanceOf(nonexistentId, ethers.Typed.overrides({}))).to.eq(0)
+    })
+
+    it('cannot deposit if token id range is invalid', async () => {
+      const { owner, user1, ft, nft } = await deployVaultFixtures()
+
+      let startId = (BigInt(0) << BigInt(32)) + BigInt(0)
+      let endId = (BigInt(1) << BigInt(32)) + BigInt(1)
+      await expect(
+        nft.deposit(ethers.ZeroAddress, 1n, startId, endId, ethers.Typed.overrides({ value: 1n })),
+      ).to.be.revertedWithCustomError(nft, 'ERC20HMirrorVaultInvalidTokenIdRange')
+
+      startId = (BigInt(1) << BigInt(32)) + BigInt(1)
+      endId = (BigInt(1) << BigInt(32)) + BigInt(0)
+      await expect(
+        nft.deposit(ethers.ZeroAddress, 1n, startId, endId, ethers.Typed.overrides({ value: 1n })),
+      ).to.be.revertedWithCustomError(nft, 'ERC20HMirrorVaultInvalidTokenIdRange')
+    })
+
+    it('can deposit for range of tokens', async () => {
+      const { owner, user1, ft, ft2, nft } = await deployVaultFixtures()
+
+      await ft.mint(owner, 100_000_000n)
+      for (let i = 0; i < 100; i++) {
+        await ft.lock(1_000_000n) // locks + mints 100 nfts
+      }
+
+      // can deposit native tokens
+      const contractBalance1 = await ethers.provider.getBalance(nft)
+
+      for (let i = 0; i < 10; i++) {
+        // each 1000 tokens that receive deposit takes about 27M gas
+        await nft.deposit(
+          ethers.ZeroAddress,
+          10_000n,
+          i * 1000,
+          (i + 1) * 1000 - 1,
+          ethers.Typed.overrides({ value: 10_000_000n }),
+        )
+      }
+
+      const contractBalance2 = await ethers.provider.getBalance(nft)
+      expect(contractBalance2 - contractBalance1).to.eq(100_000_000n)
+
+      // can deposit erc20 tokens
+      await ft2.mint(owner, 100_000_000n)
+      await ft2.approve(nft, 100_000_000n)
+
+      expect(await ft2.balanceOf(owner)).to.eq(100_000_000n)
+      expect(await ft2.balanceOf(nft)).to.eq(0)
+
+      for (let i = 0; i < 10; i++) {
+        // each 1000 tokens that receive deposit takes about 27M gas
+        await nft.deposit(ft2, 10_000n, i * 1000, (i + 1) * 1000 - 1, ethers.Typed.overrides({}))
+      }
+
+      expect(await ft2.balanceOf(owner)).to.eq(0)
+      expect(await ft2.balanceOf(nft)).to.eq(100_000_000n)
+    })
+
+    it('can deposit for array of token ids', async () => {
+      const { owner, user1, ft, ft2, nft } = await deployVaultFixtures()
+
+      await ft.mint(owner, 100_000_000n)
+      await ft.lock(1_000_000n) // should mint 100 nfts
+      expect(await nft.balanceOf(owner)).to.eq(100)
+      expect(await ft.balanceOf(owner)).to.eq(100_000_000n)
+      expect(await ethers.provider.getBalance(nft)).to.eq(0)
+      expect(await ft.balanceOf(nft)).to.eq(0)
+
+      // deposits native token
+      await nft['deposit(address,uint256,uint256[])'](
+        ethers.ZeroAddress,
+        1_000_000n,
+        [0n, 1n, 2n, 3n, 4n, 5n, 6n, 10n, 11n, 12n],
+        ethers.Typed.overrides({ value: 10_000_000n }),
+      )
+      expect(await ethers.provider.getBalance(nft)).to.eq(10_000_000n)
+      expect(await ft.balanceOf(nft)).to.eq(0)
+
+      // deposits erc20 token
+      await ft2.mint(owner, 10_000_000n)
+      await ft2.approve(nft, 10_000_000n)
+      await nft['deposit(address,uint256,uint256[])'](
+        ft2,
+        1_000_000n,
+        [0n, 1n, 2n, 3n, 4n, 5n, 6n, 10n, 11n, 12n],
+        ethers.Typed.overrides({}),
+      )
+      expect(await ethers.provider.getBalance(nft)).to.eq(10_000_000n)
+      expect(await ft2.balanceOf(nft)).to.eq(10_000_000n)
+
+      expect(await ft2.balanceOf(owner)).to.eq(0)
+    })
+
+    it('deposit succeeds when some out of many token ids do not exist', async () => {
+      const { owner, user1, ft, ft2, nft } = await deployVaultFixtures()
+
+      await ft.mint(owner, 100_000_000n)
+      await ft.lock(1_000_000n) // should mint 100 nfts
+      expect(await nft.balanceOf(owner)).to.eq(100)
+      expect(await ft.balanceOf(owner)).to.eq(100_000_000n)
+      expect(await ethers.provider.getBalance(nft)).to.eq(0)
+      expect(await ft.balanceOf(nft)).to.eq(0)
+
+      // deposits native token
+      await nft.deposit(ethers.ZeroAddress, 1_000_000n, 90n, 200n, ethers.Typed.overrides({ value: 10_000_000n }))
+      expect(await ethers.provider.getBalance(nft)).to.eq(10_000_000n)
+      expect(await ft.balanceOf(nft)).to.eq(0)
+
+      // deposits erc20 token
+      await ft2.mint(owner, 10_000_000n)
+      await ft2.approve(nft, 10_000_000n)
+      await nft.deposit(ft2, 1_000_000n, 90n, 200n, ethers.Typed.overrides({}))
+      expect(await ethers.provider.getBalance(nft)).to.eq(10_000_000n)
+      expect(await ft2.balanceOf(nft)).to.eq(10_000_000n)
+
+      expect(await ft2.balanceOf(owner)).to.eq(0)
+    })
+
+    it('depositing enforces token amount transferred is exactly correct', async () => {
+      const { owner, user1, ft, nft, ft2 } = await deployVaultFixtures()
+
+      await ft.mint(owner, 100_000_000n)
+      await ft.lock(1_000_000n) // should mint 100 nfts
+      expect(await nft.balanceOf(owner)).to.eq(100)
+      expect(await ft.balanceOf(owner)).to.eq(100_000_000n)
+      expect(await ethers.provider.getBalance(nft)).to.eq(0)
+      await ft2.mint(user1, 15_000_000n)
+      expect(await ft2.balanceOf(nft)).to.eq(0)
+
+      await expect(
+        nft.deposit(ethers.ZeroAddress, 1_000_000n, 90n, 200n, ethers.Typed.overrides({})),
+      ).to.be.revertedWithCustomError(nft, 'ERC20HMirrorVaultInvalidDeposit')
+
+      await expect(
+        nft.deposit(ethers.ZeroAddress, 1_000_000n, 90n, 200n, ethers.Typed.overrides({ value: 10_000_001n })),
+      ).to.be.revertedWithCustomError(nft, 'ERC20HMirrorVaultInvalidDeposit')
+
+      await expect(
+        nft.connect(user1).deposit(ft2, 1_000_000n, 90n, 200n, ethers.Typed.overrides({ value: 10_000_000n })),
+      ).to.be.revertedWithCustomError(nft, 'ERC20HMirrorVaultInvalidDeposit')
+
+      await ft2.connect(user1).approve(nft, 1_000_000n)
+      await expect(
+        nft.connect(user1).deposit(ft2, 1_000_000n, 90n, 200n, ethers.Typed.overrides({})),
+      ).to.be.revertedWithCustomError(ft2, 'ERC20InsufficientAllowance')
+
+      await ft2.connect(user1).approve(nft, 100_000_000n)
+      await expect(
+        nft.connect(user1).deposit(ft2, 1_000_000n, 80n, 200n, ethers.Typed.overrides({})),
+      ).to.be.revertedWithCustomError(ft2, 'ERC20InsufficientBalance')
+    })
+
+    it('cannot withdraw if token is not burned', async () => {
+      const { owner, user1, ft, nft } = await deployVaultFixtures()
+
+      await ft.mint(owner, 100_000_000n)
+      await ft.lock(1_000_000n) // should mint 100 nfts
+      expect(await nft.balanceOf(owner)).to.eq(100)
+
+      await nft['deposit(address,uint256,uint256)'](
+        ethers.ZeroAddress,
+        1_000_000n,
+        0n,
+        ethers.Typed.overrides({ value: 1_000_000n }),
+      )
+      expect(await nft.vaultBalanceOf(0n, ethers.Typed.overrides({}))).to.eq(1_000_000n)
+
+      await expect(nft.withdraw(0n)).to.be.revertedWithCustomError(nft, 'ERC20HMirrorVaultNotWithdrawable')
+      await expect(nft.connect(user1).withdraw(0n)).to.be.revertedWithCustomError(
+        nft,
+        'ERC20HMirrorVaultNotWithdrawable',
+      )
+    })
+
+    it('cannot withdraw if wrong user tries to withdraw', async () => {
+      const { owner, user1, ft, nft } = await deployVaultFixtures()
+
+      await ft.mint(owner, 100_000_000n)
+      await ft.lock(1_000_000n) // should mint 100 nfts
+      expect(await nft.balanceOf(owner)).to.eq(100)
+
+      await nft['deposit(address,uint256,uint256)'](
+        ethers.ZeroAddress,
+        1_000_000n,
+        0n,
+        ethers.Typed.overrides({ value: 1_000_000n }),
+      )
+      expect(await nft.vaultBalanceOf(0n, ethers.Typed.overrides({}))).to.eq(1_000_000n)
+      await nft.unbond(0n)
+
+      await expect(nft.connect(user1).withdraw(0n)).to.be.revertedWithCustomError(
+        nft,
+        'ERC20HMirrorVaultIncorrectWithdrawer',
+      )
+    })
+
+    it('can withdraw native token', async () => {
+      const { owner, user1, ft, nft } = await deployVaultFixtures()
+
+      await ft.mint(owner, 100_000_000n)
+      await ft.lock(1_000_000n) // should mint 100 nfts
+      expect(await nft.balanceOf(owner)).to.eq(100)
+
+      await nft['deposit(address,uint256,uint256)'](
+        ethers.ZeroAddress,
+        1_000_000n,
+        0n,
+        ethers.Typed.overrides({ value: 1_000_000n }),
+      )
+      expect(await nft.vaultBalanceOf(0n, ethers.Typed.overrides({}))).to.eq(1_000_000n)
+      await nft.unbond(0n)
+
+      expect(await ethers.provider.getBalance(nft)).to.eq(1_000_000n)
+      await nft.withdraw(0n)
+      expect(await nft.vaultBalanceOf(0n, ethers.Typed.overrides({}))).to.eq(0)
+      expect(await ethers.provider.getBalance(nft)).to.eq(0)
+    })
+
+    it('can withdraw erc20 tokens', async () => {
+      const { owner, user1, ft, nft, ft2 } = await deployVaultFixtures()
+
+      await ft.mint(owner, 100_000_000n)
+      await ft.lock(1_000_000n) // should mint 100 nfts
+      expect(await nft.balanceOf(owner)).to.eq(100)
+      await ft2.mint(owner, 100_000_000n)
+      await ft2.approve(nft, 1_000_000n)
+
+      await nft['deposit(address,uint256,uint256)'](ft2, 1_000_000n, 0n, ethers.Typed.overrides({}))
+      expect(await nft.vaultBalanceOf(0n, ft2, ethers.Typed.overrides({}))).to.eq(1_000_000n)
+      expect(await ft2.balanceOf(nft)).to.eq(1_000_000n)
+      expect(await ft2.balanceOf(owner)).to.eq(99_000_000n)
+
+      await nft.unbond(0n)
+      expect(await ft2.balanceOf(nft)).to.eq(1_000_000n)
+
+      await nft.withdraw(0n, ft2, ethers.Typed.overrides({}))
+      expect(await nft.vaultBalanceOf(0n, ft2, ethers.Typed.overrides({}))).to.eq(0)
+      expect(await ft2.balanceOf(nft)).to.eq(0)
+      expect(await ft2.balanceOf(owner)).to.eq(100_000_000n)
+    })
+
+    it('can deposit vaultable ERC20H into own NFT', async () => {
+      const { owner, user1, ft, nft } = await deployVaultFixtures()
+
+      await ft.mint(owner, 100_000_000n)
+      await ft.lock(1_000_000n) // should mint 100 nfts
+      expect(await nft.balanceOf(owner)).to.eq(100)
+
+      expect(await nft.getBondedAmount(0n)).to.eq(10_000n)
+      expect(await ft.balanceOf(nft)).to.eq(0)
+      expect(await ft.balanceOf(owner)).to.eq(100_000_000n)
+      const [locked1, bonded1, awaitingUnlock1] = await ft.lockedBalancesOf(owner)
+      expect(locked1).to.eq(1_000_000n)
+      expect(bonded1).to.eq(1_000_000n)
+      expect(awaitingUnlock1).to.eq(0)
+
+      await ft.depositToVault(0n, 1_000_000n)
+
+      expect(await nft.getBondedAmount(0n)).to.eq(1_010_000n)
+      expect(await ft.balanceOf(nft)).to.eq(0)
+      expect(await ft.balanceOf(owner)).to.eq(100_000_000n)
+      const [locked2, bonded2, awaitingUnlock2] = await ft.lockedBalancesOf(owner)
+      expect(locked2).to.eq(2_000_000n)
+      expect(bonded2).to.eq(2_000_000n)
+      expect(awaitingUnlock2).to.eq(0)
+    })
+
+    it('can deposit vaultable ERC20H into non-owned NFT', async () => {
+      const { owner, user1, ft, nft } = await deployVaultFixtures()
+
+      await ft.mint(user1, 1_000_000n)
+      await ft.mint(owner, 100_000_000n)
+      await ft.lock(1_000_000n) // should mint 100 nfts
+      expect(await nft.balanceOf(owner)).to.eq(100)
+
+      expect(await nft.getBondedAmount(0n)).to.eq(10_000n)
+      expect(await ft.balanceOf(nft)).to.eq(0)
+      expect(await ft.balanceOf(user1)).to.eq(1_000_000n)
+      expect(await ft.balanceOf(owner)).to.eq(100_000_000n)
+      const [locked1, bonded1, awaitingUnlock1] = await ft.lockedBalancesOf(owner)
+      expect(locked1).to.eq(1_000_000n)
+      expect(bonded1).to.eq(1_000_000n)
+      expect(awaitingUnlock1).to.eq(0)
+
+      await ft.connect(user1).depositToVault(0n, 1_000_000n)
+
+      expect(await nft.getBondedAmount(0n)).to.eq(1_010_000n)
+      expect(await ft.balanceOf(nft)).to.eq(0)
+      expect(await ft.balanceOf(user1)).to.eq(0)
+      expect(await ft.balanceOf(owner)).to.eq(101_000_000n)
+      const [locked2, bonded2, awaitingUnlock2] = await ft.lockedBalancesOf(owner)
+      expect(locked2).to.eq(2_000_000n)
+      expect(bonded2).to.eq(2_000_000n)
+      expect(awaitingUnlock2).to.eq(0)
+    })
+
+    it('can unbond vaultable ERC20H from NFT', async () => {
+      const { owner, user1, ft, nft } = await deployVaultFixtures()
+
+      await ft.mint(owner, 100_000_000n)
+      await ft.lock(1_000_000n) // should mint 100 nfts
+      expect(await nft.balanceOf(owner)).to.eq(100)
+
+      expect(await nft.getBondedAmount(0n)).to.eq(10_000n)
+      expect(await ft.balanceOf(nft)).to.eq(0)
+      expect(await ft.balanceOf(owner)).to.eq(100_000_000n)
+      const [locked1, bonded1, awaitingUnlock1] = await ft.lockedBalancesOf(owner)
+      expect(locked1).to.eq(1_000_000n)
+      expect(bonded1).to.eq(1_000_000n)
+      expect(awaitingUnlock1).to.eq(0)
+
+      await ft.depositToVault(0n, 1_000_000n)
+
+      expect(await nft.getBondedAmount(0n)).to.eq(1_010_000n)
+      expect(await ft.balanceOf(nft)).to.eq(0)
+      expect(await ft.balanceOf(owner)).to.eq(100_000_000n)
+      const [locked2, bonded2, awaitingUnlock2] = await ft.lockedBalancesOf(owner)
+      expect(locked2).to.eq(2_000_000n)
+      expect(bonded2).to.eq(2_000_000n)
+      expect(awaitingUnlock2).to.eq(0)
+
+      await nft.unbond(0n)
+
+      await expect(nft.getBondedAmount(0n)).to.be.revertedWithCustomError(nft, 'ERC721NonexistentToken')
+      expect(await ft.balanceOf(nft)).to.eq(0)
+      expect(await ft.balanceOf(owner)).to.eq(100_000_000n)
+      const [locked3, bonded3, awaitingUnlock3] = await ft.lockedBalancesOf(owner)
+      expect(locked3).to.eq(990_000n)
+      expect(bonded3).to.eq(990_000n)
+      expect(awaitingUnlock3).to.eq(0)
+    })
+
+    it('can transfer nft with vaultable tokens and withdraw', async () => {
+      const { owner, user1, ft, nft } = await deployVaultFixtures()
+
+      await ft.mint(owner, 100_000_000n)
+      await ft.lock(1_000_000n) // should mint 100 nfts
+      expect(await nft.balanceOf(owner)).to.eq(100)
+
+      expect(await nft.getBondedAmount(0n)).to.eq(10_000n)
+      expect(await ft.balanceOf(nft)).to.eq(0)
+      expect(await ft.balanceOf(owner)).to.eq(100_000_000n)
+      const [locked1, bonded1, awaitingUnlock1] = await ft.lockedBalancesOf(owner)
+      expect(locked1).to.eq(1_000_000n)
+      expect(bonded1).to.eq(1_000_000n)
+      expect(awaitingUnlock1).to.eq(0)
+      expect(await ft.balanceOf(user1)).to.eq(0)
+      const [locked2, bonded2, awaitingUnlock2] = await ft.lockedBalancesOf(user1)
+      expect(locked2).to.eq(0)
+      expect(bonded2).to.eq(0)
+      expect(awaitingUnlock2).to.eq(0)
+
+      await ft.depositToVault(0n, 10_000n)
+      await nft.connect(owner).safeTransferFrom(owner, user1, 0n)
+
+      expect(await nft.getBondedAmount(0n)).to.eq(20_000n)
+      expect(await ft.balanceOf(nft)).to.eq(0)
+      expect(await ft.balanceOf(owner)).to.eq(99_980_000n)
+      const [locked3, bonded3, awaitingUnlock3] = await ft.lockedBalancesOf(owner)
+      expect(locked3).to.eq(990_000n)
+      expect(bonded3).to.eq(990_000n)
+      expect(awaitingUnlock3).to.eq(0)
+      expect(await ft.balanceOf(user1)).to.eq(20_000n)
+      const [locked4, bonded4, awaitingUnlock4] = await ft.lockedBalancesOf(user1)
+      expect(locked4).to.eq(20_000n)
+      expect(bonded4).to.eq(20_000n)
+      expect(awaitingUnlock4).to.eq(0)
+
+      await nft.connect(user1).unbond(0n)
+
+      expect(await ft.balanceOf(user1)).to.eq(20_000n)
+      const [locked5, bonded5, awaitingUnlock5] = await ft.lockedBalancesOf(user1)
+      expect(locked5).to.eq(0)
+      expect(bonded5).to.eq(0)
+      expect(awaitingUnlock5).to.eq(0)
     })
   })
 
@@ -1187,6 +1699,55 @@ describe('ERC20H', () => {
       await expect(bonded1).to.eq(0)
       await expect(awaitingUnlock1).to.eq(0)
       expect(await nft.balanceOf(owner)).to.eq(0)
+    })
+
+    it('[OPTIONAL] burning nft permanently strands vault funds', async () => {
+      const { owner, user1, ft, nft, ft2 } = await deployVaultFixtures()
+
+      await ft.mint(owner, 100_000_000n)
+      await ft.lock(1_000_000n) // should mint 100 nfts
+      expect(await nft.balanceOf(owner)).to.eq(100)
+      await ft2.mint(owner, 100_000_000n)
+      await ft2.approve(nft, 1_000_000n)
+
+      // deposit native token
+      await nft['deposit(address,uint256,uint256)'](
+        ethers.ZeroAddress,
+        1_000_000n,
+        0n,
+        ethers.Typed.overrides({ value: 1_000_000n }),
+      )
+      expect(await nft.vaultBalanceOf(0n, ethers.Typed.overrides({}))).to.eq(1_000_000n)
+
+      // deposit erc20
+      await nft['deposit(address,uint256,uint256)'](ft2, 1_000_000n, 0n, ethers.Typed.overrides({}))
+      expect(await nft.vaultBalanceOf(0n, ft2, ethers.Typed.overrides({}))).to.eq(1_000_000n)
+      expect(await ft2.balanceOf(nft)).to.eq(1_000_000n)
+      expect(await ft2.balanceOf(owner)).to.eq(99_000_000n)
+
+      // deposit vaultable hybrid tokens
+      await ft.depositToVault(0n, 1_000_000n)
+      expect(await nft.getBondedAmount(0n)).to.eq(1_010_000n)
+
+      // burn nft
+      await nft.burn(0n)
+
+      expect(await nft.vaultBalanceOf(0n, ethers.Typed.overrides({}))).to.eq(1_000_000n)
+      expect(await nft.vaultBalanceOf(0n, ft2, ethers.Typed.overrides({}))).to.eq(1_000_000n)
+      expect(await ft2.balanceOf(nft)).to.eq(1_000_000n)
+
+      await expect(nft.withdraw(0n, ethers.Typed.overrides({}))).to.be.revertedWithCustomError(
+        nft,
+        'ERC20HMirrorVaultNotWithdrawable',
+      )
+      await expect(nft.withdraw(0n, ft2, ethers.Typed.overrides({}))).to.be.revertedWithCustomError(
+        nft,
+        'ERC20HMirrorVaultNotWithdrawable',
+      )
+      await expect(nft.getBondedAmount(0n)).to.be.revertedWithCustomError(nft, 'ERC721NonexistentToken')
+
+      expect(await ft.balanceOf(owner)).to.eq(98_990_000n)
+      expect(await ft2.balanceOf(owner)).to.eq(99_000_000n)
     })
   })
 })

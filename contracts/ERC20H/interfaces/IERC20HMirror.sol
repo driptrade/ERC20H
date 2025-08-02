@@ -14,6 +14,8 @@ interface IERC20HMirror is IERC721 {
 
 	function getMintableTokenIds(uint256 numTokens, uint256 value) external view returns (uint256[] memory);
 
+	function getBondedAmount(uint256 tokenId) external view returns(uint256);
+
 	function bond(address to, uint256 tokenId) external;
 
 	function unbond(uint256 tokenId) external;
